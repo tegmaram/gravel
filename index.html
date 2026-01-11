@@ -686,390 +686,414 @@ that encoded URLs can still be accessed by anyone with the link. Use responsibly
 
 <script>
     // Fixed Encryption System
-    class SecureLink {
-        constructor() {
-            this.key = null;
-            this.init();
-        }
+    // SIMPLE BUT RELIABLE ENCRYPTION SYSTEM
+class SimpleSecureLink {
+    constructor() {
+        // Fixed encryption key - MUST BE THE SAME for encode/decode
+        this.fixedKey = "my-secure-fixed-key-12345-!@#$";
+    }
 
-        async init() {
-            // Create a consistent key for encoding/decoding
-            // This must be the SAME for both encode and decode
-            const seed = "secure-link-pro-consistent-key-2024";
+    async encode(text) {
+        try {
+            // Convert text to bytes
             const encoder = new TextEncoder();
-            const data = encoder.encode(seed);
+            const data = encoder.encode(text);
             
-            // Hash to get 256-bit key
-            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-            
-            // Import as AES key
-            this.key = await crypto.subtle.importKey(
+            // Derive key from fixed string
+            const keyMaterial = await crypto.subtle.importKey(
                 "raw",
-                hashBuffer,
-                { name: "AES-CBC" },
+                new TextEncoder().encode(this.fixedKey),
+                { name: "PBKDF2" },
+                false,
+                ["deriveKey"]
+            );
+            
+            const key = await crypto.subtle.deriveKey(
+                {
+                    name: "PBKDF2",
+                    salt: new TextEncoder().encode("secure-salt"),
+                    iterations: 100000,
+                    hash: "SHA-256"
+                },
+                keyMaterial,
+                { name: "AES-GCM", length: 256 },
                 false,
                 ["encrypt", "decrypt"]
             );
-        }
-
-        async encode(text) {
-            await this.waitForKey();
             
-            try {
-                const encoder = new TextEncoder();
-                const data = encoder.encode(text);
-                
-                // Generate IV - must be 16 bytes for AES-CBC
-                const iv = crypto.getRandomValues(new Uint8Array(16));
-                
-                // Encrypt
-                const encrypted = await crypto.subtle.encrypt(
-                    { name: "AES-CBC", iv: iv },
-                    this.key,
-                    data
-                );
-                
-                // Combine IV + encrypted data
-                const combined = new Uint8Array(iv.length + encrypted.byteLength);
-                combined.set(iv);
-                combined.set(new Uint8Array(encrypted), iv.length);
-                
-                // Convert to base64 and make URL-safe
-                const base64 = btoa(String.fromCharCode.apply(null, combined));
-                return base64
-                    .replace(/\+/g, '-')
-                    .replace(/\//g, '_')
-                    .replace(/=/g, '');
-                    
-            } catch (error) {
-                console.error('Encode error:', error);
-                throw error;
-            }
-        }
-
-        async decode(encoded) {
-            await this.waitForKey();
+            // Generate IV
+            const iv = crypto.getRandomValues(new Uint8Array(12));
             
-            try {
-                // Convert from URL-safe base64
-                let base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+            // Encrypt
+            const encrypted = await crypto.subtle.encrypt(
+                {
+                    name: "AES-GCM",
+                    iv: iv
+                },
+                key,
+                data
+            );
+            
+            // Combine IV + encrypted data
+            const combined = new Uint8Array(iv.length + encrypted.byteLength);
+            combined.set(iv);
+            combined.set(new Uint8Array(encrypted), iv.length);
+            
+            // Convert to URL-safe base64
+            const base64 = btoa(String.fromCharCode(...combined));
+            return base64
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=/g, '');
                 
-                // Add padding if needed
-                const pad = base64.length % 4;
-                if (pad) {
-                    if (pad === 1) throw new Error('Invalid base64 length');
-                    base64 += '='.repeat(4 - pad);
-                }
-                
-                // Decode base64
-                const binary = atob(base64);
-                const bytes = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i++) {
-                    bytes[i] = binary.charCodeAt(i);
-                }
-                
-                // Extract IV (first 16 bytes) and encrypted data
-                const iv = bytes.slice(0, 16);
-                const encrypted = bytes.slice(16);
-                
-                // Decrypt
-                const decrypted = await crypto.subtle.decrypt(
-                    { name: "AES-CBC", iv: iv },
-                    this.key,
-                    encrypted
-                );
-                
-                return new TextDecoder().decode(decrypted);
-                
-            } catch (error) {
-                console.error('Decode error:', error);
-                throw new Error('Invalid or corrupted link');
-            }
-        }
-
-        async waitForKey() {
-            while (!this.key) {
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
-        }
-
-        validateURL(url) {
-            try {
-                // Try to create a URL object
-                new URL(url);
-                return url.startsWith('http://') || url.startsWith('https://');
-            } catch {
-                return false;
-            }
+        } catch (error) {
+            console.error('Encode error:', error);
+            throw error;
         }
     }
 
-    // DOM Elements
-    const tabBtns = document.querySelectorAll('.tab-btn');
-    const encodeTab = document.getElementById('encode-tab');
-    const decodeTab = document.getElementById('decode-tab');
-    const encodeInput = document.getElementById('encode-input');
-    const decodeInput = document.getElementById('decode-input');
-    const encodeBtn = document.getElementById('encode-btn');
-    const decodeBtn = document.getElementById('decode-btn');
-    const encodeLoading = document.getElementById('encode-loading');
-    const decodeLoading = document.getElementById('decode-loading');
-    const encodeResult = document.getElementById('encode-result');
-    const encodedOutput = document.getElementById('encoded-output');
-    const copyEncodedBtn = document.getElementById('copy-encoded-btn');
-    const redirectOverlay = document.getElementById('redirect-overlay');
-
-    // Initialize encryption system
-    const secureLink = new SecureLink();
-
-    // Tab switching
-    tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const tabName = btn.dataset.tab;
-            
-            // Update tabs
-            tabBtns.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            
-            // Update content
-            encodeTab.classList.remove('active');
-            decodeTab.classList.remove('active');
-            document.getElementById(`${tabName}-tab`).classList.add('active');
-            
-            // Clear states
-            encodeLoading.classList.remove('active');
-            decodeLoading.classList.remove('active');
-            encodeResult.classList.remove('active');
-            
-            // Reset buttons
-            encodeBtn.style.display = 'flex';
-            decodeBtn.style.display = 'flex';
-        });
-    });
-
-    // Encode URL
-    encodeBtn.addEventListener('click', async () => {
-        const url = encodeInput.value.trim();
-        
-        if (!url) {
-            showToast('Please enter a URL', 'error');
-            return;
-        }
-        
-        // Validate URL
-        let validUrl = url;
-        if (!/^https?:\/\//i.test(validUrl)) {
-            validUrl = 'https://' + validUrl;
-        }
-        
-        if (!secureLink.validateURL(validUrl)) {
-            showToast('Please enter a valid URL', 'error');
-            return;
-        }
-        
-        // Show loading
-        encodeLoading.classList.add('active');
-        encodeBtn.style.display = 'none';
-        
+    async decode(encoded) {
         try {
-            // Encode the URL
-            const encoded = await secureLink.encode(validUrl);
+            // Decode from URL-safe base64
+            let base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
             
-            // Generate full link
-            const baseUrl = window.location.origin + window.location.pathname;
-            const cleanBase = baseUrl.replace(/\/[^\/]*\.html?$/, '').replace(/\/$/, '');
-            const fullLink = `${cleanBase}/#${encoded}`;
-            
-            // Display result
-            encodedOutput.textContent = fullLink;
-            encodeResult.classList.add('active');
-            encodeLoading.classList.remove('active');
-            
-            // Scroll to result
-            setTimeout(() => {
-                encodeResult.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }, 100);
-            
-        } catch (error) {
-            console.error('Encode failed:', error);
-            showToast('Failed to encode URL. Please try again.', 'error');
-            encodeLoading.classList.remove('active');
-            encodeBtn.style.display = 'flex';
-        }
-    });
-
-    // Decode and redirect
-    decodeBtn.addEventListener('click', async () => {
-        const encodedLink = decodeInput.value.trim();
-        
-        if (!encodedLink) {
-            showToast('Please paste an encoded link', 'error');
-            return;
-        }
-        
-        // Extract encoded part
-        let encoded;
-        if (encodedLink.includes('#')) {
-            encoded = encodedLink.split('#')[1];
-        } else {
-            encoded = encodedLink;
-        }
-        
-        if (!encoded) {
-            showToast('Invalid encoded link format', 'error');
-            return;
-        }
-        
-        // Show loading
-        decodeLoading.classList.add('active');
-        decodeBtn.style.display = 'none';
-        
-        try {
-            // Decode the URL
-            const decodedUrl = await secureLink.decode(encoded);
-            
-            if (!decodedUrl) {
-                throw new Error('Invalid or corrupted data');
+            // Add padding
+            while (base64.length % 4) {
+                base64 += '=';
             }
             
-            // Validate it's a proper URL
-            if (!secureLink.validateURL(decodedUrl)) {
-                throw new Error('Decoded data is not a valid URL');
+            // Convert to bytes
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
             }
             
-            // Show redirect overlay
-            redirectOverlay.classList.add('active');
+            // Extract IV (first 12 bytes) and encrypted data
+            const iv = bytes.slice(0, 12);
+            const encrypted = bytes.slice(12);
             
-            // Redirect after brief delay
-            setTimeout(() => {
-                window.location.replace(decodedUrl);
-            }, 800);
+            // Derive key (same as encode)
+            const keyMaterial = await crypto.subtle.importKey(
+                "raw",
+                new TextEncoder().encode(this.fixedKey),
+                { name: "PBKDF2" },
+                false,
+                ["deriveKey"]
+            );
+            
+            const key = await crypto.subtle.deriveKey(
+                {
+                    name: "PBKDF2",
+                    salt: new TextEncoder().encode("secure-salt"),
+                    iterations: 100000,
+                    hash: "SHA-256"
+                },
+                keyMaterial,
+                { name: "AES-GCM", length: 256 },
+                false,
+                ["encrypt", "decrypt"]
+            );
+            
+            // Decrypt
+            const decrypted = await crypto.subtle.decrypt(
+                {
+                    name: "AES-GCM",
+                    iv: iv
+                },
+                key,
+                encrypted
+            );
+            
+            return new TextDecoder().decode(decrypted);
             
         } catch (error) {
-            console.error('Decode failed:', error);
-            showToast('Decryption failed. Invalid or corrupted link.', 'error');
-            decodeLoading.classList.remove('active');
-            decodeBtn.style.display = 'flex';
+            console.error('Decode error:', error);
+            throw new Error('Invalid or corrupted link');
         }
-    });
+    }
 
-    // Copy encoded link
-    copyEncodedBtn.addEventListener('click', async () => {
-        const text = encodedOutput.textContent;
+    validateURL(url) {
+        // Simple URL validation
+        return url.startsWith('http://') || url.startsWith('https://');
+    }
+}
+
+// DOM Elements
+const tabBtns = document.querySelectorAll('.tab-btn');
+const encodeTab = document.getElementById('encode-tab');
+const decodeTab = document.getElementById('decode-tab');
+const encodeInput = document.getElementById('encode-input');
+const decodeInput = document.getElementById('decode-input');
+const encodeBtn = document.getElementById('encode-btn');
+const decodeBtn = document.getElementById('decode-btn');
+const encodeLoading = document.getElementById('encode-loading');
+const decodeLoading = document.getElementById('decode-loading');
+const encodeResult = document.getElementById('encode-result');
+const encodedOutput = document.getElementById('encoded-output');
+const copyEncodedBtn = document.getElementById('copy-encoded-btn');
+const redirectOverlay = document.getElementById('redirect-overlay');
+
+// Initialize
+const secureLink = new SimpleSecureLink();
+
+// Tab switching
+tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tabName = btn.dataset.tab;
         
-        if (!text) return;
+        tabBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
         
+        encodeTab.classList.remove('active');
+        decodeTab.classList.remove('active');
+        document.getElementById(`${tabName}-tab`).classList.add('active');
+        
+        encodeLoading.classList.remove('active');
+        decodeLoading.classList.remove('active');
+        encodeResult.classList.remove('active');
+        
+        encodeBtn.style.display = 'flex';
+        decodeBtn.style.display = 'flex';
+    });
+});
+
+// Encode URL
+encodeBtn.addEventListener('click', async () => {
+    const url = encodeInput.value.trim();
+    
+    if (!url) {
+        showToast('Please enter a URL', 'error');
+        return;
+    }
+    
+    let validUrl = url;
+    if (!/^https?:\/\//i.test(validUrl)) {
+        validUrl = 'https://' + validUrl;
+    }
+    
+    if (!secureLink.validateURL(validUrl)) {
+        showToast('Please enter a valid URL', 'error');
+        return;
+    }
+    
+    encodeLoading.classList.add('active');
+    encodeBtn.style.display = 'none';
+    
+    try {
+        const encoded = await secureLink.encode(validUrl);
+        
+        const baseUrl = window.location.origin + window.location.pathname;
+        const cleanBase = baseUrl.replace(/\/[^\/]*\.html?$/, '').replace(/\/$/, '');
+        const fullLink = `${cleanBase}/#${encoded}`;
+        
+        encodedOutput.textContent = fullLink;
+        encodeResult.classList.add('active');
+        encodeLoading.classList.remove('active');
+        
+        // Store in session for testing
+        sessionStorage.setItem('lastEncoded', encoded);
+        sessionStorage.setItem('lastOriginal', validUrl);
+        
+    } catch (error) {
+        console.error('Encode failed:', error);
+        showToast('Failed to encode URL', 'error');
+        encodeLoading.classList.remove('active');
+        encodeBtn.style.display = 'flex';
+    }
+});
+
+// Decode and redirect
+decodeBtn.addEventListener('click', async () => {
+    const encodedLink = decodeInput.value.trim();
+    
+    if (!encodedLink) {
+        showToast('Please paste an encoded link', 'error');
+        return;
+    }
+    
+    let encoded;
+    if (encodedLink.includes('#')) {
+        encoded = encodedLink.split('#')[1];
+    } else {
+        encoded = encodedLink;
+    }
+    
+    if (!encoded) {
+        showToast('Invalid encoded link format', 'error');
+        return;
+    }
+    
+    decodeLoading.classList.add('active');
+    decodeBtn.style.display = 'none';
+    
+    try {
+        console.log('Attempting to decode:', encoded.substring(0, 30) + '...');
+        
+        // Try decoding with current system
+        const decodedUrl = await secureLink.decode(encoded);
+        
+        console.log('Decoded URL:', decodedUrl);
+        
+        if (!decodedUrl) {
+            throw new Error('Decoded empty');
+        }
+        
+        if (!secureLink.validateURL(decodedUrl)) {
+            // Try adding https://
+            const correctedUrl = 'https://' + decodedUrl;
+            if (secureLink.validateURL(correctedUrl)) {
+                redirectTo(correctedUrl);
+                return;
+            }
+            throw new Error('Invalid URL format');
+        }
+        
+        redirectTo(decodedUrl);
+        
+    } catch (error) {
+        console.error('Decode error:', error);
+        
+        // Try to decode as base64 directly (for testing)
         try {
-            await navigator.clipboard.writeText(text);
-            copyEncodedBtn.classList.add('copied');
-            copyEncodedBtn.innerHTML = '<i class="fas fa-check"></i><span>Copied</span>';
+            let testBase64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+            while (testBase64.length % 4) {
+                testBase64 += '=';
+            }
+            const testDecoded = atob(testBase64);
+            console.log('Direct base64 decode:', testDecoded.substring(0, 100));
             
-            setTimeout(() => {
-                copyEncodedBtn.classList.remove('copied');
-                copyEncodedBtn.innerHTML = '<i class="far fa-copy"></i><span>Copy</span>';
-            }, 2000);
-        } catch (error) {
-            showToast('Failed to copy to clipboard', 'error');
+            if (testDecoded.startsWith('http')) {
+                showToast('Found URL via base64: ' + testDecoded.substring(0, 50) + '...', 'info');
+                redirectTo(testDecoded);
+                return;
+            }
+        } catch (e) {
+            console.log('Base64 also failed');
         }
-    });
-
-    // Handle direct links
-    window.addEventListener('load', async () => {
-        const hash = window.location.hash.substring(1);
         
-        if (hash) {
-            // Switch to decode tab
-            tabBtns.forEach(b => b.classList.remove('active'));
-            document.querySelector('.tab-btn[data-tab="decode"]').classList.add('active');
-            encodeTab.classList.remove('active');
-            decodeTab.classList.add('active');
-            
-            // Auto-fill and auto-redirect
-            const baseUrl = window.location.origin + window.location.pathname;
-            decodeInput.value = `${baseUrl}#${hash}`;
-            
-            // Auto-redirect after delay
-            setTimeout(async () => {
-                try {
-                    decodeLoading.classList.add('active');
-                    const decodedUrl = await secureLink.decode(hash);
-                    
-                    if (decodedUrl && secureLink.validateURL(decodedUrl)) {
-                        redirectOverlay.classList.add('active');
-                        setTimeout(() => {
-                            window.location.replace(decodedUrl);
-                        }, 800);
-                    } else {
-                        showToast('Invalid or corrupted link', 'error');
-                        decodeLoading.classList.remove('active');
-                    }
-                } catch (error) {
-                    showToast('Could not decode the link', 'error');
+        showToast('Decryption failed. Link may be from different system.', 'error');
+        decodeLoading.classList.remove('active');
+        decodeBtn.style.display = 'flex';
+    }
+});
+
+function redirectTo(url) {
+    redirectOverlay.classList.add('active');
+    
+    // Add delay to show loading state
+    setTimeout(() => {
+        console.log('Redirecting to:', url);
+        window.location.replace(url);
+    }, 800);
+}
+
+// Copy encoded link
+copyEncodedBtn.addEventListener('click', async () => {
+    const text = encodedOutput.textContent;
+    
+    if (!text) return;
+    
+    try {
+        await navigator.clipboard.writeText(text);
+        copyEncodedBtn.classList.add('copied');
+        copyEncodedBtn.innerHTML = '<i class="fas fa-check"></i><span>Copied</span>';
+        
+        setTimeout(() => {
+            copyEncodedBtn.classList.remove('copied');
+            copyEncodedBtn.innerHTML = '<i class="far fa-copy"></i><span>Copy</span>';
+        }, 2000);
+    } catch (error) {
+        showToast('Failed to copy', 'error');
+    }
+});
+
+// Handle direct links
+window.addEventListener('load', async () => {
+    const hash = window.location.hash.substring(1);
+    
+    if (hash) {
+        // Switch to decode tab
+        tabBtns.forEach(b => b.classList.remove('active'));
+        document.querySelector('.tab-btn[data-tab="decode"]').classList.add('active');
+        encodeTab.classList.remove('active');
+        decodeTab.classList.add('active');
+        
+        // Auto-fill
+        const baseUrl = window.location.origin + window.location.pathname;
+        decodeInput.value = `${baseUrl}#${hash}`;
+        
+        // Auto-redirect
+        setTimeout(async () => {
+            try {
+                decodeLoading.classList.add('active');
+                const decodedUrl = await secureLink.decode(hash);
+                
+                if (decodedUrl && secureLink.validateURL(decodedUrl)) {
+                    redirectTo(decodedUrl);
+                } else {
+                    showToast('Invalid direct link', 'error');
                     decodeLoading.classList.remove('active');
                 }
-            }, 500);
-        }
-    });
-
-    // Auto-decode on paste
-    decodeInput.addEventListener('paste', (e) => {
-        setTimeout(() => {
-            if (decodeInput.value.trim()) {
-                decodeBtn.click();
+            } catch (error) {
+                console.error('Auto-decode failed:', error);
+                decodeLoading.classList.remove('active');
             }
-        }, 100);
-    });
-
-    // Auto-add https://
-    encodeInput.addEventListener('blur', function() {
-        const value = this.value.trim();
-        if (value && !/^https?:\/\//i.test(value)) {
-            this.value = 'https://' + value;
-        }
-    });
-
-    // Toast notification
-    function showToast(message, type = 'info') {
-        const toast = document.createElement('div');
-        toast.className = `toast-notification ${type}`;
-        toast.textContent = message;
-        toast.style.cssText = `
-            position: fixed;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%) translateY(100px);
-            background: ${type === 'error' ? 'var(--error)' : 'var(--success)'};
-            color: white;
-            padding: 15px 25px;
-            border-radius: 12px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-            z-index: 1000;
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            font-weight: 500;
-            max-width: 90%;
-            text-align: center;
-        `;
-        
-        document.body.appendChild(toast);
-        
-        setTimeout(() => {
-            toast.style.transform = 'translateX(-50%) translateY(0)';
-            toast.style.opacity = '1';
-        }, 10);
-        
-        setTimeout(() => {
-            toast.style.transform = 'translateX(-50%) translateY(100px)';
-            toast.style.opacity = '0';
-            setTimeout(() => {
-                document.body.removeChild(toast);
-            }, 400);
-        }, 3000);
+        }, 500);
     }
+});
 
-    // Initialize
-    encodeInput.focus();
+// Auto-decode on paste
+decodeInput.addEventListener('paste', (e) => {
+    setTimeout(() => {
+        if (decodeInput.value.trim()) {
+            decodeBtn.click();
+        }
+    }, 100);
+});
+
+// Toast notification
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%) translateY(100px);
+        background: ${type === 'error' ? '#ef4444' : type === 'info' ? '#3b82f6' : '#10b981'};
+        color: white;
+        padding: 15px 25px;
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        z-index: 1000;
+        opacity: 0;
+        transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        font-weight: 500;
+        max-width: 90%;
+        text-align: center;
+    `;
+    
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.transform = 'translateX(-50%) translateY(0)';
+        toast.style.opacity = '1';
+    }, 10);
+    
+    setTimeout(() => {
+        toast.style.transform = 'translateX(-50%) translateY(100px)';
+        toast.style.opacity = '0';
+        setTimeout(() => {
+            document.body.removeChild(toast);
+        }, 400);
+    }, 3000);
+}
+
+// Initialize
+encodeInput.focus();
 </script>
 </body>
 
 </html>
+
